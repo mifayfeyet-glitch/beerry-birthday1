@@ -17,33 +17,42 @@
         const db = getFirestore(app);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        let user = null;
+        let userId = null;
 
-        // התחברות אנונימית ואתחול
-        async function initAuth() {
-            await signInAnonymously(auth);
+        async function initApp() {
+            try {
+                await signInAnonymously(auth);
+            } catch (e) {
+                console.error("Auth failed", e);
+            }
         }
-        initAuth();
-        onAuthStateChanged(auth, (u) => {
-            user = u;
-            if (user) setupGreetingsListener();
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                userId = user.uid;
+                setupGreetingsListener();
+            }
         });
 
+        // שימוש בנתיב המשתמש האישי להבטחת הרשאות כתיבה וקריאה
+        const getGreetingsRef = () => collection(db, 'artifacts', appId, 'users', userId, 'greetings');
+
         function setupGreetingsListener() {
-            const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'greetings'));
-            onSnapshot(q, (snapshot) => {
+            onSnapshot(query(getGreetingsRef()), (snapshot) => {
                 const list = [];
                 snapshot.forEach(doc => list.push(doc.data()));
                 renderGreetings(list);
-            }, (err) => {});
+            }, (err) => { 
+                console.error("Snapshot error:", err);
+            });
         }
 
         function renderGreetings(list) {
             const container = document.getElementById('greetings-grid');
             container.innerHTML = list.map(g => `
-                <button onclick="showGreeting('${g.sender}', '${g.text}')" class="bg-slate-800 p-4 rounded-xl border border-slate-700 hover:border-pink-500 transition text-center">
-                    <span class="text-3xl">${g.emoji}</span>
-                    <p class="font-bold text-sm mt-2">${g.sender}</p>
+                <button onclick="showGreeting('${(g.sender || '').replace(/'/g, "\\'")}', '${(g.text || '').replace(/'/g, "\\'")}')" class="bg-slate-800 p-4 rounded-xl border border-slate-700 hover:border-pink-500 transition text-center">
+                    <span class="text-3xl">${g.emoji || '🎈'}</span>
+                    <p class="font-bold text-sm mt-2">${g.sender || 'אנונימי'}</p>
                 </button>
             `).join('');
         }
@@ -51,30 +60,34 @@
         window.addNewGreeting = async function() {
             const sender = document.getElementById('new-sender').value;
             const text = document.getElementById('new-text').value;
-            const emoji = window.selectedEmoji || '🎈';
-            if (!sender || !text) {
-                document.getElementById('form-error-msg').classList.remove('hidden');
+            const emoji = document.getElementById('new-emoji').value || '🎈';
+            const errorMsg = document.getElementById('form-error-msg');
+            
+            if (!sender || !text || !userId) {
+                errorMsg.classList.remove('hidden');
                 return;
             }
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'greetings'), { sender, text, emoji });
-            document.getElementById('new-sender').value = '';
-            document.getElementById('new-text').value = '';
-            document.getElementById('greeting-form-container').classList.add('hidden');
+            errorMsg.classList.add('hidden');
+
+            try {
+                await addDoc(getGreetingsRef(), { sender, text, emoji, timestamp: Date.now() });
+                document.getElementById('new-sender').value = '';
+                document.getElementById('new-text').value = '';
+                document.getElementById('greeting-form-container').classList.add('hidden');
+            } catch (e) {
+                console.error("Write error: ", e);
+                alert("שגיאת הרשאות - אנא רענן את הדף.");
+            }
         }
+
+        initApp();
     </script>
     <style>
         body { font-family: 'Heebo', sans-serif; background: linear-gradient(135deg, #090d16 0%, #0f172a 50%, #1e1b4b 100%); overflow-x: hidden; }
         .glow-text { text-shadow: 0 0 15px rgba(236, 72, 153, 0.7), 0 0 30px rgba(236, 72, 153, 0.5); }
-        .flame { animation: flicker 0.6s infinite alternate; }
-        @keyframes flicker { 0% { transform: scale(1) rotate(-2deg); } 100% { transform: scale(1.1) rotate(2deg); } }
-        .wobble-gift { animation: wobble 1.5s infinite ease-in-out; }
-        @keyframes wobble { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-8deg); } 75% { transform: rotate(8deg); } }
-        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body class="text-slate-100 min-h-screen">
-    <!-- שאר הקוד המקורי נשאר ללא שינוי -->
     <header class="relative z-10 w-full px-6 py-4 flex justify-between items-center bg-slate-900/80 backdrop-blur-md border-b border-pink-500/20">
         <h1 class="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-400">בארי חוגג יום הולדת!</h1>
     </header>
@@ -98,8 +111,15 @@
             </div>
 
             <div id="greeting-form-container" class="hidden mt-6 bg-slate-950 p-6 rounded-2xl max-w-lg mx-auto text-right">
+                <p id="form-error-msg" class="hidden text-red-400 text-sm mb-2 text-center">נא למלא את כל השדות!</p>
                 <input id="new-sender" placeholder="שם המברך" class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700">
                 <textarea id="new-text" placeholder="הברכה שלכם..." class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700"></textarea>
+                <select id="new-emoji" class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700">
+                    <option value="🎈">🎈 בלון</option>
+                    <option value="🎂">🎂 עוגה</option>
+                    <option value="🎁">🎁 מתנה</option>
+                    <option value="🎉">🎉 מסיבה</option>
+                </select>
                 <button onclick="addNewGreeting()" class="w-full bg-gradient-to-r from-pink-500 to-purple-600 py-3 rounded-xl font-black">שילוח ברכה 🚀</button>
             </div>
         </section>
