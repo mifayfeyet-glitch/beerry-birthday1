@@ -17,7 +17,8 @@
         const db = getFirestore(app);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        let userId = null;
+        let userUid = null;
+        let greetingsCache = {};
 
         async function initApp() {
             try {
@@ -29,18 +30,22 @@
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
-                userId = user.uid;
+                userUid = user.uid;
                 setupGreetingsListener();
             }
         });
 
-        // שימוש בנתיב המשתמש האישי להבטחת הרשאות כתיבה וקריאה
-        const getGreetingsRef = () => collection(db, 'artifacts', appId, 'users', userId, 'greetings');
+        const getGreetingsRef = () => collection(db, 'artifacts', appId, 'users', userUid, 'greetings');
 
         function setupGreetingsListener() {
             onSnapshot(query(getGreetingsRef()), (snapshot) => {
                 const list = [];
-                snapshot.forEach(doc => list.push(doc.data()));
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const id = doc.id;
+                    greetingsCache[id] = data;
+                    list.push({ ...data, id });
+                });
                 renderGreetings(list);
             }, (err) => { 
                 console.error("Snapshot error:", err);
@@ -50,24 +55,30 @@
         function renderGreetings(list) {
             const container = document.getElementById('greetings-grid');
             container.innerHTML = list.map(g => `
-                <button onclick="showGreeting('${(g.sender || '').replace(/'/g, "\\'")}', '${(g.text || '').replace(/'/g, "\\'")}')" class="bg-slate-800 p-4 rounded-xl border border-slate-700 hover:border-pink-500 transition text-center">
+                <button onclick="showGreeting('${g.id}')" class="bg-slate-800 p-4 rounded-xl border border-slate-700 hover:border-pink-500 transition text-center">
                     <span class="text-3xl">${g.emoji || '🎈'}</span>
                     <p class="font-bold text-sm mt-2">${g.sender || 'אנונימי'}</p>
                 </button>
             `).join('');
         }
 
+        window.showGreeting = (id) => {
+            const g = greetingsCache[id];
+            if (g) {
+                document.getElementById('greeting-display').classList.remove('hidden');
+                document.getElementById('greeting-sender').innerText = g.sender;
+                document.getElementById('greeting-text').innerText = g.text;
+            }
+        }
+
         window.addNewGreeting = async function() {
+            if (!userUid) return;
+
             const sender = document.getElementById('new-sender').value;
             const text = document.getElementById('new-text').value;
             const emoji = document.getElementById('new-emoji').value || '🎈';
-            const errorMsg = document.getElementById('form-error-msg');
             
-            if (!sender || !text || !userId) {
-                errorMsg.classList.remove('hidden');
-                return;
-            }
-            errorMsg.classList.add('hidden');
+            if (!sender || !text) return;
 
             try {
                 await addDoc(getGreetingsRef(), { sender, text, emoji, timestamp: Date.now() });
@@ -76,7 +87,6 @@
                 document.getElementById('greeting-form-container').classList.add('hidden');
             } catch (e) {
                 console.error("Write error: ", e);
-                alert("שגיאת הרשאות - אנא רענן את הדף.");
             }
         }
 
@@ -111,7 +121,6 @@
             </div>
 
             <div id="greeting-form-container" class="hidden mt-6 bg-slate-950 p-6 rounded-2xl max-w-lg mx-auto text-right">
-                <p id="form-error-msg" class="hidden text-red-400 text-sm mb-2 text-center">נא למלא את כל השדות!</p>
                 <input id="new-sender" placeholder="שם המברך" class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700">
                 <textarea id="new-text" placeholder="הברכה שלכם..." class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700"></textarea>
                 <select id="new-emoji" class="w-full bg-slate-900 p-3 rounded-xl mb-3 border border-slate-700">
@@ -124,13 +133,5 @@
             </div>
         </section>
     </main>
-
-    <script>
-        window.showGreeting = (s, t) => {
-            document.getElementById('greeting-display').classList.remove('hidden');
-            document.getElementById('greeting-sender').innerText = s;
-            document.getElementById('greeting-text').innerText = t;
-        }
-    </script>
 </body>
 </html>
